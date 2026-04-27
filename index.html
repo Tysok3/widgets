@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <script src="https://docs.getgrist.com/grist-plugin-api.js"></script>
+</head>
+<style>
+  body {font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; font-size: 14px; background-color: #F0F0F0; color: #333}
+  #container { background-color: white !important; }
+  .header {padding: 4px 5px; display: flex; align-items: center; gap: 5px; top: 0; position: sticky; z-index: 10; background-color: #F0F0F0; box-shadow: 0 1px 0 0 #F0F0F0;}
+
+  table {width: 100%; border-collapse: collapse; background: white; table-layout: fixed; min-width: 450px}
+  thead { position: sticky; top: 28px; z-index: 9; }
+  th { padding: 2px; border-bottom: 2px solid #F0F0F0; text-align: left;  font-weight: 600; background-color: #F0F0F0; }  
+  td {padding: 2px; border-bottom: 1px solid #F0F0F0; vertical-align: middle; cursor: default}
+
+  .vertical-header {  height: 20px; vertical-align: bottom; text-align: center;}
+  .vertical-text {writing-mode: vertical-rl; transform: rotate(180deg); white-space: nowrap; margin: 0 auto;}
+
+  th:nth-child(1) {width: 225px;}
+  th:nth-child(2), th:nth-child(3), th:nth-child(4) {width: 15px; text-align: center;}
+  th:nth-child(5) {min-width: 100px; text-align: center;}
+  th:nth-child(6) {min-width: 84px;}
+  th:nth-child(7) {min-width: 55px;}
+
+  td:nth-child(1) {overflow: hidden; text-overflow: ellipsis; white-space: nowrap;}
+  td:nth-child(2), td:nth-child(3), td:nth-child(4) {text-align: center;}
+  td:nth-child(6), td:nth-child(7) {font-size: 10px;}
+  input[type="date"]::-webkit-calendar-picker-indicator {cursor: pointer;}
+  .date-input {background: transparent; color: inherit; border: none; width: 100%; text-align: center; cursor: text}
+  .overdue {background-color: #DB0000; color: #FFEA00;}
+  .overdue .date-input::-webkit-calendar-picker-indicator {filter: invert(1);}
+
+  input[type="checkbox"] {width: 14px; height: 14px; margin: 0; vertical-align: middle; cursor: pointer; background-color: #fff}
+  tbody tr:nth-child(even) {background-color: #f9f9f9;}
+  tbody tr:hover { background-color: #C9CCF2; }
+  tr.selected {background-color: #C9E0F2 !important; outline: 1px solid #007bff;}
+</style>
+
+<body>
+  <div class="container">
+    <div class="header">
+      <label for="job-selector">Filter by Job:</label>
+      <select id="job-selector" style="flex-grow: 1;"></select>
+    </div>
+    <table>
+      <thead>
+        <tr>
+          <th>Job Name</th>
+          <th class="vertical-header"><div class="vertical-text">Des</div></th>
+          <th class="vertical-header"><div class="vertical-text">Est</div></th>
+          <th class="vertical-header"><div class="vertical-text">Ord</div></th>
+          <th>Due Date</th>
+          <th>Status</th>
+          <th>Assigned</th>
+        </tr>
+      </thead>
+      <tbody id="table-body"></tbody>
+    </table>
+  </div>
+</body>
+<script>
+let allRecords = [];
+let dropdownRecords = [];
+let isFirstLoad = true;
+
+const safeDate = (val) => {
+  if (!val) return null;
+  const d = new Date(typeof val === 'number' && val < 10000000000 ? val * 1000 : val);
+  return isNaN(d.getTime()) ? null : d;
+};
+
+grist.ready({requiredAccess: 'full', allowSelectBy: true});
+
+grist.onRecords((records) => {
+  const today = new Date().setHours(0,0,0,0);
+  
+  const base = records.filter(r => !r.Archive_Request && r.Design).map(r => {
+    const dueDate = safeDate(r.D_Due);
+    return {
+      ...r,
+      _dueDate: dueDate,
+      _dateStr: dueDate ? dueDate.toISOString().split('T')[0] : '',
+      _isOverdue: dueDate && dueDate < today && !r.D_Bid_Set_Complete && !r.D_Waiting_TF
+    };
+  });
+
+  allRecords = [...base].sort((a, b) => {
+    const wait = (a.D_Waiting_TF ? 1 : 0) - (b.D_Waiting_TF ? 1 : 0);
+    if (wait !== 0) return wait;
+    if (a._dueDate && b._dueDate) return a._dueDate - b._dueDate;
+    return !a._dueDate ? 1 : -1;
+  });
+
+  dropdownRecords = [...base].sort((a, b) => 
+    (a.Project || "").localeCompare(b.Project || "", undefined, {sensitivity: 'base'})
+  );
+
+  if (isFirstLoad && allRecords.length > 0) {
+    grist.setSelectedRows([allRecords[0].id]);
+    isFirstLoad = false;
+  }
+
+  updateUI();
+});
+
+function updateUI() {
+  const tableBody = document.getElementById('table-body');
+  const selector = document.getElementById('job-selector');
+  const selectedId = Number(selector.value) || (allRecords[0]?.id);
+
+  if (selector.options.length !== dropdownRecords.length) {
+    selector.innerHTML = dropdownRecords.map(r => 
+      `<option value="${r.id}">${r.Project || "Unnamed Job"}</option>`
+    ).join('');
+    selector.value = selectedId;
+  }
+
+  tableBody.innerHTML = allRecords.map(r => `
+    <tr id="row-${r.id}" class="${selectedId === r.id ? 'selected' : ''}" data-id="${r.id}">
+      <td>${r.Project || ''}</td>
+      <td><input type="checkbox" ${r.Design ? 'checked' : ''} data-key="Design"></td>
+      <td><input type="checkbox" ${r.Estimating ? 'checked' : ''} data-key="Estimating"></td>
+      <td><input type="checkbox" ${r.Order ? 'checked' : ''} data-key="Order"></td>
+      <td class="${r._isOverdue ? 'overdue' : ''}">
+        <input type="date" class="date-input" value="${r._dateStr}" data-key="D_Due">
+      </td>
+      <td>${r.Design_Helper_Status || ''}</td>
+      <td>${r.Design_Helper_Assign || ''}</td>
+    </tr>
+  `).join('');
+}
+
+document.getElementById('table-body').addEventListener('change', async (e) => {
+  const rowId = Number(e.target.closest('tr').dataset.id);
+  const colId = e.target.dataset.key;
+  const val = e.target.type === 'checkbox' ? e.target.checked : (e.target.value || null);
+  
+  await grist.docApi.applyUserActions([
+    ['UpdateRecord', 'Project', rowId, { [colId]: val }]
+  ]);
+});
+
+document.getElementById('table-body').addEventListener('click', (e) => {
+  const row = e.target.closest('tr');
+  if (!row || e.target.tagName === 'INPUT') return;
+  
+  const id = Number(row.dataset.id);
+  grist.setSelectedRows([id]);
+  document.getElementById('job-selector').value = id;
+  updateUI();
+});
+
+document.getElementById('job-selector').onchange = (e) => {
+  grist.setSelectedRows([Number(e.target.value)]);
+  updateUI();
+};
+</script>
+</html>
